@@ -130,7 +130,8 @@ export default function Profile() {
           onClick={async () => {
             try {
               await supabase.auth.signOut()
-              navigate('/')
+              // Use replace to prevent going back to the profile page
+              navigate('/login', { replace: true })
             } catch (err: any) {
               console.error('Error signing out:', err)
               setError('Failed to sign out')

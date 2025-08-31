@@ -1,18 +1,67 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
+// Function to generate username and check availability
+const generateUsername = async (firstName: string, lastName: string): Promise<string> => {
+  // Base username: 'a' + first letter of firstname + lastname (all lowercase)
+  const baseUsername = ('a' + firstName.charAt(0) + lastName).toLowerCase()
+  
+  // Check if base username exists
+  const { data: existingUsers } = await supabase
+    .from('admin_profiles')
+    .select('username')
+    .ilike('username', `${baseUsername}%`)
+    .order('username', { ascending: true })
+
+  if (!existingUsers?.length) {
+    return baseUsername
+  }
+
+  // Find the highest number suffix
+  const usernames = (existingUsers as { username: string }[]).map(u => u.username)
+  let highestSuffix = 0
+
+  usernames.forEach(username => {
+    if (username === baseUsername) {
+      highestSuffix = Math.max(highestSuffix, 1)
+    } else {
+      const suffix = parseInt(username.replace(baseUsername, '')) || 0
+      highestSuffix = Math.max(highestSuffix, suffix)
+    }
+  })
+
+  return `${baseUsername}${highestSuffix + 1}`
+}
+
 const Signup = () => {
-  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const [emailValue, setEmailValue] = useState('')
+  const [isVerifying, setIsVerifying] = useState(true)
+  const [session, setSession] = useState<any>(null)
   
   useEffect(() => {
-    const emailFromUrl = searchParams.get('email')
-    if (emailFromUrl) {
-      setEmailValue(emailFromUrl)
+    const verifyInvitation = async () => {
+      try {
+        const { data: { session: currentSession }, error } = await supabase.auth.getSession()
+        if (error) throw error
+        
+        if (currentSession?.user?.email) {
+          setEmailValue(currentSession.user.email)
+          setSession(currentSession)
+        } else {
+          throw new Error('No valid session found')
+        }
+        setIsVerifying(false)
+      } catch (error) {
+        console.error('Error verifying invitation:', error)
+        setIsVerifying(false)
+        setError('Invalid or expired invitation. Please use the link from your email.')
+      }
     }
-  }, [searchParams])
+
+    verifyInvitation()
+  }, [])
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -28,16 +77,15 @@ const Signup = () => {
     setLoading(true)
     setError(null)
 
-    // Validate email and invitation token
+    // Validate form data
     if (!emailValue) {
       setError('No email provided in invitation link')
       setLoading(false)
       return
     }
 
-    const inviteToken = searchParams.get('invitation_token')
-    if (!inviteToken) {
-      setError('Invalid invitation token')
+    if (!session) {
+      setError('Invalid or expired session. Please use the link from your email.')
       setLoading(false)
       return
     }
@@ -49,14 +97,8 @@ const Signup = () => {
     }
 
     try {
-      // Verify the invitation token and create the user
-      const { error: verifyError } = await supabase.auth.verifyOtp({
-        email: emailValue,
-        token: inviteToken,
-        type: 'signup'
-      })
-
-      if (verifyError) throw verifyError
+      // Generate username
+      const username = await generateUsername(formData.firstName, formData.lastName)
 
       // Update the user's password and metadata
       const { error: updateError } = await supabase.auth.updateUser({
@@ -64,7 +106,8 @@ const Signup = () => {
         data: {
           first_name: formData.firstName,
           last_name: formData.lastName,
-          phone_number: formData.phoneNumber
+          phone_number: formData.phoneNumber,
+          username: username
         }
       })
 
@@ -80,6 +123,7 @@ const Signup = () => {
         .from('admin_profiles')
         .insert([{
           auth_user_id: user.id,
+          username: username,
           first_name: formData.firstName,
           last_name: formData.lastName,
           email: emailValue,
@@ -96,6 +140,18 @@ const Signup = () => {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (isVerifying) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+        <div className="sm:mx-auto sm:w-full sm:max-w-md">
+          <h2 className="text-center text-3xl font-extrabold text-gray-900">
+            Verifying invitation...
+          </h2>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -138,6 +194,19 @@ const Signup = () => {
             </div>
 
             <div>
+              <label htmlFor="username" className="block text-sm font-medium text-gray-700">
+                Username (auto-generated)
+              </label>
+              <div className="mt-1 block w-full p-2 rounded-md border border-gray-300 bg-gray-50">
+                <span className="text-gray-900 font-medium">
+                  {formData.firstName && formData.lastName ? 
+                    `a${formData.firstName.charAt(0).toLowerCase()}${formData.lastName.toLowerCase()}` : 
+                    'Please enter your name'}
+                </span>
+              </div>
+            </div>
+
+            <div>
               <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
                 Phone Number
               </label>
@@ -155,8 +224,10 @@ const Signup = () => {
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                 Email
               </label>
-              <div className="mt-1 block w-full text-gray-900 font-medium">
-                {emailValue}
+              <div className="mt-1 block w-full p-2 rounded-md border border-gray-300 bg-gray-50">
+                <span className="text-gray-900 font-medium">
+                  {emailValue || 'No email found. Please use the invitation link from your email.'}
+                </span>
               </div>
             </div>
 
